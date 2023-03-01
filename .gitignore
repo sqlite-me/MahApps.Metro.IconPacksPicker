@@ -381,3 +381,4 @@ FodyWeavers.xsd
 /obj/MahApps.Metro.IconPacksPicker.csproj.nuget.g.targets
 /obj/MahApps.Metro.IconPacksPicker.csproj.nuget.g.props
 /obj/MahApps.Metro.IconPacksPicker.csproj.nuget.dgspec.json
+*.cache

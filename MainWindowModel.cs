@@ -1,6 +1,7 @@
 ﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MahApps.Metro.IconPacks;
+using Microsoft.VisualBasic;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -9,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Reflection.Metadata;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -65,7 +67,7 @@ namespace MahApps.Metro.IconPacksPicker
                 fresh();
             }
         }
-        private int pageSize=50;
+        private int pageSize=300;
 
         /// <summary>
         /// 
@@ -127,52 +129,59 @@ namespace MahApps.Metro.IconPacksPicker
 
         private void loading()
         {
-            foreach (var assemblyFile in Directory.EnumerateFiles(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!, "*.dll"))
+            List<Assembly> assemblies = new();
+                var assemblyFiles = Directory.EnumerateFiles(Path.GetFullPath( "./"), "*.dll");
+            if (assemblyFiles != null)
             {
-                var allTypes = Assembly.LoadFile(assemblyFile).GetTypes();
-
-                foreach (var type in allTypes.Where(t => t.IsClass && t.IsSubclassOf(typeof(PackIconControlBase))))
+                foreach (var assemblyFile in assemblyFiles)
                 {
-                    var properties = type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.SetProperty)
-                        .Where(t => t.DeclaringType == type && t.PropertyType.IsEnum);
-                    if (!properties.Any()) continue;
-                    var propertyKind = properties.FirstOrDefault(t => t.Name == "Kind");
-                    if (propertyKind == null)
-                    {
-                        propertyKind = properties.First();
-                    }
-
-                    var variable = Expression.Variable(type);
-                    var param = Expression.Parameter(propertyKind.PropertyType);
-                    var assign = Expression.Assign(variable, Expression.New(type));
-                    var setKind = Expression.Call(variable, propertyKind.SetMethod!, param);
-                    var @delegate = Expression.Lambda(
-                        Expression.Block(
-                            new[] { variable },
-                            assign, setKind, variable),
-                        param).Compile();
-                    foreach (var iconType in Enum.GetValues(propertyKind.PropertyType))
-                    {
-                        dispatcher.Invoke(() =>
-                        {
-                            if (@delegate.DynamicInvoke(iconType) is PackIconControlBase packIcon)
-                            {
-                                packIcon.FontSize = 
-                                packIcon.Width = 
-                                packIcon.Height = 30;
-                                listIcons.Add(new InstanceData { Instance = packIcon, TypeName = type.Name, KindName = iconType.ToString() });
-                            }
-                        });
-                    }
-
-                    listKinds.Add(type.Name);
-
-                    fresh();
-                    dispatcher.Invoke(IconTypes.Refresh);
-                    Task.Delay(100).Wait();
+                    try { assemblies.Add(Assembly.LoadFile(assemblyFile)); } catch { }
                 }
             }
 
+            assemblies=assemblies.Concat( new[] { Assembly.GetExecutingAssembly(), Assembly.GetEntryAssembly(), Assembly.GetCallingAssembly() })
+                .Distinct().ToList()!;
+            foreach (var one in assemblies)
+            {
+                try { tryLoading(one!); } catch { }
+            }
+        }
+
+        private void tryLoading(Assembly assembly)
+        {
+            var allTypes =assembly.GetTypes();
+            foreach (var type in allTypes.Where(t => t.IsClass && t.IsSubclassOf(typeof(PackIconControlBase))))
+            {
+                if (listKinds.Contains(type.Name)) continue;
+                var properties = type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.SetProperty)
+                    .Where(t => t.DeclaringType == type && t.PropertyType.IsEnum);
+                if (!properties.Any()) continue;
+                var propertyKind = properties.FirstOrDefault(t => t.Name == "Kind");
+                if (propertyKind == null)
+                {
+                    propertyKind = properties.First();
+                }
+
+                var variable = Expression.Variable(type);
+                var param = Expression.Parameter(propertyKind.PropertyType);
+                var assign = Expression.Assign(variable, Expression.New(type));
+                var setKind = Expression.Call(variable, propertyKind.SetMethod!, param);
+                var @delegate = Expression.Lambda(
+                    Expression.Block(
+                        new[] { variable },
+                        assign, setKind, variable),
+                    param).Compile();
+
+                foreach (var iconType in Enum.GetValues(propertyKind.PropertyType))
+                {
+                    listIcons.Add(new InstanceData(type, iconType, @delegate, dispatcher));
+                }
+                listKinds.Add(type.Name);
+
+                fresh();
+                //dispatcher.Invoke(IconTypes.Refresh);
+                Task.Delay(100).Wait();
+            }
         }
 
         [RelayCommand]
@@ -184,9 +193,34 @@ namespace MahApps.Metro.IconPacksPicker
 
     internal class InstanceData
     {
-        public PackIconControlBase Instance { get; internal set; }
-        public string TypeName { get; internal set; }
-        public string? KindName { get; internal set; }
+        private Type type;
+        private object iconType;
+        private Delegate @delegate;
+        private Dispatcher dispatcher;
+
+        public InstanceData(Type type, object iconType, Delegate @delegate, Dispatcher dispatcher)
+        {
+            this.type = type;
+            this.iconType = iconType;
+            this.@delegate = @delegate;
+            this.dispatcher = dispatcher;
+        }
+
+        public PackIconControlBase Instance => instance ?? get();
+        private PackIconControlBase instance;
+        public string TypeName => type.Name;
+        public string? KindName => iconType?.ToString();
+        private PackIconControlBase get()
+        {
+            if (@delegate.DynamicInvoke(iconType) is PackIconControlBase packIcon)
+            {
+                packIcon.FontSize =
+                packIcon.Width =
+                packIcon.Height = 30;
+                instance = packIcon;
+            }
+            return instance;
+        }
     }
 
     internal class NotifyObject : INotifyPropertyChanged
